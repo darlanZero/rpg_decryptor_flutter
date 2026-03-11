@@ -1,8 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:path/path.dart' as p;
 import '../models/decryption_info.dart';
+import 'dex_parser.dart';
 
-/// Serviço que analisa arquivos .smali em busca de chaves de criptografia
+/// Serviço que analisa arquivos .smali, System.json e .dex em busca de chaves
 class AnalyzerService {
   final void Function(String message) onLog;
 
@@ -33,7 +36,7 @@ class AnalyzerService {
 
     if (smaliDirs.isEmpty) {
       onLog('⚠️  Nenhuma pasta smali encontrada.');
-      onLog('   Tentando busca nos assets extraídos...');
+      onLog('   Tentando métodos alternativos de detecção...');
       return _tryDirectAssetAnalysis(decompiledDir);
     }
 
@@ -57,8 +60,9 @@ class AnalyzerService {
     }
 
     if (cryptoFiles.isEmpty) {
-      onLog('❌ Nenhuma classe de criptografia encontrada.');
-      return null;
+      onLog('❌ Nenhuma classe de criptografia encontrada no smali.');
+      onLog('   Tentando métodos alternativos...');
+      return _tryDirectAssetAnalysis(decompiledDir);
     }
 
     onLog('✅ ${cryptoFiles.length} arquivo(s) candidato(s) encontrado(s)');
@@ -84,12 +88,208 @@ class AnalyzerService {
       }
     }
 
-    onLog('⚠️  Chave não detectada automaticamente.');
+    onLog('⚠️  Chave não detectada no smali. Tentando métodos alternativos...');
+    return _tryDirectAssetAnalysis(decompiledDir);
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Fallback: análise sem smali
+  // ─────────────────────────────────────────────────────────────────
+
+  Future<EncryptionInfo?> _tryDirectAssetAnalysis(String dir) async {
+    // Método 1: System.json (RPG Maker MV / MZ)
+    final systemJsonResult = await _findSystemJson(dir);
+    if (systemJsonResult != null) return systemJsonResult;
+
+    // Método 2: varredura de strings em arquivos .dex
+    final dexResult = await _scanDexFiles(dir);
+    if (dexResult != null) return dexResult;
+
+    onLog('❌ Sem smali não é possível extrair a chave automaticamente.');
+    onLog('💡 Dica: insira a chave manualmente na seção "Chave Manual".');
     return null;
   }
 
   // ─────────────────────────────────────────────────────────────────
-  // Helpers privados
+  // Método 1 — System.json (RPG Maker MV / MZ)
+  // O campo "encryptionKey" contém a chave em hex (ex: "a1b2c3d4e5f6...")
+  // ─────────────────────────────────────────────────────────────────
+
+  Future<EncryptionInfo?> _findSystemJson(String dir) async {
+    onLog('📄 Procurando System.json (RPG Maker MV/MZ)...');
+
+    // Caminhos mais comuns primeiro (rápido)
+    final priorityCandidates = [
+      p.join(dir, 'assets', 'www', 'data', 'System.json'),
+      p.join(dir, 'assets', 'www', 'data', 'system.json'),
+      p.join(dir, 'www', 'data', 'System.json'),
+      p.join(dir, 'www', 'data', 'system.json'),
+      p.join(dir, 'assets', 'data', 'System.json'),
+    ];
+
+    for (final path in priorityCandidates) {
+      final file = File(path);
+      if (file.existsSync()) {
+        final result = await _parseSystemJson(file);
+        if (result != null) return result;
+      }
+    }
+
+    // Busca recursiva completa como fallback
+    final rootDir = Directory(dir);
+    if (!rootDir.existsSync()) return null;
+
+    try {
+      await for (final entity in rootDir.list(recursive: true)) {
+        if (entity is File &&
+            p.basename(entity.path).toLowerCase() == 'system.json') {
+          final result = await _parseSystemJson(entity);
+          if (result != null) return result;
+        }
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
+  Future<EncryptionInfo?> _parseSystemJson(File file) async {
+    try {
+      final content = await file.readAsString(encoding: utf8);
+      final json = jsonDecode(content);
+
+      if (json is! Map<String, dynamic>) return null;
+
+      // Campo principal: "encryptionKey" (RPG Maker MV/MZ padrão)
+      for (final key in ['encryptionKey', 'EncryptionKey', 'encryption_key']) {
+        final value = json[key];
+        if (value is String && value.isNotEmpty) {
+          final shortVal =
+              value.length > 20 ? '${value.substring(0, 20)}...' : value;
+          onLog('✅ Chave encontrada em System.json: $shortVal');
+          onLog('🔒 Tipo: AES-CBC (padrão RPG Maker MV/MZ)');
+          return EncryptionInfo(
+            secretKey: value,
+            encryptionType: 'AES-CBC',
+            sourceFile: 'System.json',
+          );
+        }
+      }
+    } catch (e) {
+      // System.json pode estar vazio ou malformado em alguns jogos
+    }
+    return null;
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Método 2 — Parser DEX binário (sem Java)
+  //
+  // O formato DEX armazena todas as constantes de string em uma tabela
+  // indexada. Ao parsear o header do DEX (offsets documentados), extraímos
+  // diretamente os literais de string — o mesmo resultado que baksmali/
+  // apktool produziria, sem nenhuma dependência externa.
+  // ─────────────────────────────────────────────────────────────────
+
+  Future<EncryptionInfo?> _scanDexFiles(String dir) async {
+    onLog('🔬 Parseando arquivos .dex (formato binário DEX)...');
+
+    final rootDir = Directory(dir);
+    if (!rootDir.existsSync()) return null;
+
+    // Prioridade: classes.dex, classes2.dex, classes3.dex (ordem de relevância)
+    final dexFiles = <File>[];
+    for (final name in ['classes.dex', 'classes2.dex', 'classes3.dex',
+                         'classes4.dex', 'classes5.dex']) {
+      final f = File(p.join(dir, name));
+      if (f.existsSync()) dexFiles.add(f);
+    }
+
+    // Busca recursiva se não encontrou na raiz (APK com estrutura diferente)
+    if (dexFiles.isEmpty) {
+      try {
+        await for (final entity in rootDir.list(recursive: true)) {
+          if (entity is File && p.extension(entity.path) == '.dex') {
+            dexFiles.add(entity);
+            if (dexFiles.length >= 6) break;
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (dexFiles.isEmpty) {
+      onLog('⚠️  Nenhum arquivo .dex encontrado no APK extraído.');
+      return null;
+    }
+
+    onLog('   ${dexFiles.length} arquivo(s) .dex encontrado(s)');
+
+    for (final dex in dexFiles) {
+      final result = await _extractKeyFromDex(dex);
+      if (result != null) return result;
+    }
+
+    return null;
+  }
+
+  /// Usa [DexParser] para extrair strings do formato binário DEX e
+  /// identificar candidatos a chave de criptografia.
+  Future<EncryptionInfo?> _extractKeyFromDex(File dexFile) async {
+    try {
+      final stat = dexFile.statSync();
+      // Lê até 20MB para DEX grandes (classes.dex de jogos pode ser volumoso)
+      final maxBytes = min(stat.size, 20 * 1024 * 1024);
+      final raf = dexFile.openSync();
+      final bytes = raf.readSync(maxBytes);
+      raf.closeSync();
+
+      final parser = DexParser(bytes);
+
+      if (!parser.isValidDex) {
+        // Não é DEX válido, silenciosamente ignora
+        return null;
+      }
+
+      // Verifica se este DEX tem referências a crypto antes de varrer tudo
+      final hasCrypto = parser.hasCryptoReferences();
+      if (!hasCrypto) {
+        // DEX sem referências a criptografia — provavelmente não tem a chave
+        return null;
+      }
+
+      final encType = parser.detectEncryptionType();
+      onLog('   📂 ${p.basename(dexFile.path)}: DEX v${parser.version}, '
+            'possui referências crypto ($encType)');
+
+      // Extrai candidatos a chave da tabela de strings
+      final keyCandidates = parser.extractAllStrings(filterForKeys: true);
+
+      if (keyCandidates.isEmpty) {
+        onLog('   ⚠️  Nenhum candidato a chave nas strings do DEX.');
+        return null;
+      }
+
+      onLog('   🔎 ${keyCandidates.length} candidato(s) encontrado(s)');
+
+      // Retorna o primeiro candidato válido
+      for (final candidate in keyCandidates) {
+        final shortKey = candidate.length > 20
+            ? '${candidate.substring(0, 20)}...'
+            : candidate;
+        onLog('🔑 Chave encontrada em ${p.basename(dexFile.path)}: $shortKey');
+        onLog('🔒 Tipo: $encType (via parser DEX)');
+        return EncryptionInfo(
+          secretKey: candidate,
+          encryptionType: encType,
+          sourceFile: p.basename(dexFile.path),
+        );
+      }
+    } catch (e) {
+      onLog('   ⚠️  Erro ao parsear ${p.basename(dexFile.path)}: $e');
+    }
+    return null;
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Helpers privados — smali
   // ─────────────────────────────────────────────────────────────────
 
   List<Directory> _findSmaliDirs(String root) {
@@ -137,17 +337,6 @@ class AnalyzerService {
     return result;
   }
 
-  /// Fallback: analisa assets extraídos diretamente
-  Future<EncryptionInfo?> _tryDirectAssetAnalysis(String dir) async {
-    final assetsDir = Directory(p.join(dir, 'assets'));
-    if (!assetsDir.existsSync()) return null;
-
-    onLog('📁 Tentando busca em assets/...');
-    // Sem smali, não temos como extrair a chave automaticamente
-    onLog('❌ Sem smali não é possível extrair a chave automaticamente.');
-    return null;
-  }
-
   /// Extrai a secret key de um arquivo .smali
   String? _extractSecretKey(String content) {
     // Padrão 1: const-string com valor longo
@@ -177,10 +366,8 @@ class AnalyzerService {
   }
 
   bool _looksLikeKey(String s) {
-    // Evita URLs, caminhos, nomes de classes...
     if (s.contains('.') || s.contains('/') || s.contains('\\')) return false;
     if (s.length < 16) return false;
-    // Precisa ter pelo menos alguns números e letras misturados
     final hasDigit = s.contains(RegExp(r'\d'));
     final hasLetter = s.contains(RegExp(r'[A-Za-z]'));
     return hasDigit && hasLetter;

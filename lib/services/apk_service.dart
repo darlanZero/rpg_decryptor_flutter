@@ -53,7 +53,16 @@ class ApkService {
         return true;
       } else {
         onLog('❌ Erro apktool (code ${result.exitCode}):');
-        onLog(result.stderr.toString().trim());
+        final stderr = result.stderr.toString().trim();
+        onLog(stderr);
+        // Código 127 no Android = SELinux bloqueou execução cross-app
+        if (result.exitCode == 127 || stderr.contains('inaccessible')) {
+          onLog('');
+          onLog('⚠️  MOTIVO: SELinux do Android impede que apps executem');
+          onLog('   binários de outros apps (como o Termux).');
+          onLog('   Isso é uma restrição de segurança do sistema.');
+          onLog('   O app continuará usando extração direta + System.json.');
+        }
         return false;
       }
     } on TimeoutException {

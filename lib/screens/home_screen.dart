@@ -668,7 +668,37 @@ class _SettingsPanelState extends State<_SettingsPanel> {
               'Vazio = usa o Java do PATH. No Termux use o caminho abaixo:',
               style: TextStyle(color: Colors.white30, fontSize: 11),
             ),
-            const SizedBox(height: 2),
+            const SizedBox(height: 6),
+            // Aviso SELinux
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2D1B00),
+                border: Border.all(color: const Color(0xFFE67E22), width: 1),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.warning_amber_rounded,
+                      color: Color(0xFFE67E22), size: 16),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Limitação Android (SELinux): o sistema bloqueia a execução '
+                      'de binários de outros apps. O Java do Termux provavelmente '
+                      'não funcionará. O app usará System.json + varredura DEX como alternativa.',
+                      style: TextStyle(
+                        color: Color(0xFFE67E22),
+                        fontSize: 10,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
             GestureDetector(
               onTap: () {
                 _javaPathController.text =
