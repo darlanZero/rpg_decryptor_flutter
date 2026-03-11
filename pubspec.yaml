@@ -1,0 +1,46 @@
+name: rpg_decryptor
+description: RPG Maker Android Auto-Decryptor - GUI Version by Darlan
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # UI / Icons
+  cupertino_icons: ^1.0.6
+  google_fonts: ^6.1.0
+
+  # File picker & permissions
+  file_picker: ^6.2.1
+  permission_handler: ^11.3.0
+
+  # Storage paths
+  path_provider: ^2.1.2
+  path: ^1.9.0
+
+  # Criptografia (AES)
+  encrypt: ^5.0.3
+  crypto: ^3.0.3
+
+  # ZIP / APK extraction
+  archive: ^3.4.10
+
+  # State management
+  provider: ^6.1.2
+
+  # Shared prefs (salvar últimas configurações)
+  shared_preferences: ^2.2.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/
