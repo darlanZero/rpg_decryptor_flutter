@@ -599,9 +599,30 @@ class _ResultCard extends StatelessWidget {
 }
 
 /// Painel de configurações
-class _SettingsPanel extends StatelessWidget {
+class _SettingsPanel extends StatefulWidget {
   final VoidCallback onClose;
   const _SettingsPanel({required this.onClose});
+
+  @override
+  State<_SettingsPanel> createState() => _SettingsPanelState();
+}
+
+class _SettingsPanelState extends State<_SettingsPanel> {
+  late final TextEditingController _javaPathController;
+
+  @override
+  void initState() {
+    super.initState();
+    _javaPathController = TextEditingController(
+      text: context.read<DecryptorProvider>().javaPath,
+    );
+  }
+
+  @override
+  void dispose() {
+    _javaPathController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -629,7 +650,7 @@ class _SettingsPanel extends StatelessWidget {
                 const Spacer(),
                 IconButton(
                   icon: const Icon(Icons.close, color: Colors.white38, size: 18),
-                  onPressed: onClose,
+                  onPressed: widget.onClose,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
                 ),
@@ -637,7 +658,63 @@ class _SettingsPanel extends StatelessWidget {
             ),
             const SizedBox(height: 16),
 
-            // apktool.jar
+            // ── Caminho do Java ──────────────────────────────────────
+            const Text(
+              'Caminho do Java (opcional)',
+              style: TextStyle(color: Colors.white54, fontSize: 13),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Vazio = usa o Java do PATH. No Termux use o caminho abaixo:',
+              style: TextStyle(color: Colors.white30, fontSize: 11),
+            ),
+            const SizedBox(height: 2),
+            GestureDetector(
+              onTap: () {
+                _javaPathController.text =
+                    '/data/data/com.termux/files/usr/bin/java';
+                provider.setJavaPath(_javaPathController.text);
+              },
+              child: const Text(
+                '/data/data/com.termux/files/usr/bin/java  (toque para preencher)',
+                style: TextStyle(
+                  color: Color(0xFF5DADE2),
+                  fontSize: 11,
+                  decoration: TextDecoration.underline,
+                  decorationColor: Color(0xFF5DADE2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _javaPathController,
+              onChanged: provider.setJavaPath,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontFamily: 'monospace',
+                fontSize: 12,
+              ),
+              decoration: InputDecoration(
+                hintText: 'Ex: /data/data/com.termux/files/usr/bin/java',
+                prefixIcon: const Icon(Icons.coffee_rounded,
+                    color: Colors.white38, size: 18),
+                suffixIcon: provider.javaPath.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear,
+                            color: Colors.white30, size: 16),
+                        onPressed: () {
+                          _javaPathController.clear();
+                          provider.setJavaPath('');
+                        },
+                      )
+                    : null,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // ── apktool.jar ──────────────────────────────────────────
             const Text(
               'Caminho do apktool.jar',
               style: TextStyle(color: Colors.white54, fontSize: 13),

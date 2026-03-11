@@ -16,11 +16,14 @@ class ApkService {
   // ─────────────────────────────────────────────────────────────────
 
   /// Tenta descompilar com apktool.jar.
-  /// [apktoolPath] = caminho completo para o apktool.jar
+  /// [apktoolJarPath] = caminho completo para o apktool.jar
+  /// [javaExecutable] = caminho do binário java (padrão: 'java').
+  ///   No Termux use: /data/data/com.termux/files/usr/bin/java
   Future<bool> decompileWithApktool({
     required String apkPath,
     required String outputDir,
     required String apktoolJarPath,
+    String javaExecutable = 'java',
   }) async {
     final jar = File(apktoolJarPath);
     if (!jar.existsSync()) {
@@ -28,7 +31,9 @@ class ApkService {
       return false;
     }
 
+    final javaExe = javaExecutable.trim().isEmpty ? 'java' : javaExecutable.trim();
     onLog('📦 Descompilando com apktool...');
+    onLog('☕ Java: $javaExe');
     onLog('⏳ Isso pode levar alguns minutos...');
 
     try {
@@ -38,7 +43,7 @@ class ApkService {
       }
 
       final result = await Process.run(
-        'java',
+        javaExe,
         ['-jar', apktoolJarPath, 'd', apkPath, '-o', outputDir, '-f'],
         runInShell: true,
       ).timeout(const Duration(minutes: 8));
@@ -142,10 +147,12 @@ class ApkService {
     return null;
   }
 
-  /// Verifica se Java está no PATH
-  static Future<bool> javaAvailable() async {
+  /// Verifica se Java está disponível.
+  /// [javaExecutable] pode ser 'java' (PATH) ou caminho absoluto.
+  static Future<bool> javaAvailable([String javaExecutable = 'java']) async {
+    final exe = javaExecutable.trim().isEmpty ? 'java' : javaExecutable.trim();
     try {
-      final r = await Process.run('java', ['-version'], runInShell: true);
+      final r = await Process.run(exe, ['-version'], runInShell: true);
       return r.exitCode == 0;
     } catch (_) {
       return false;

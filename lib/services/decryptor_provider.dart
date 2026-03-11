@@ -16,6 +16,11 @@ class DecryptorProvider extends ChangeNotifier {
   String outputFolder = '';
   bool useDirectExtraction = false; // fallback sem Java
 
+  /// Caminho absoluto do binário java.
+  /// Vazio = usa 'java' do PATH do sistema.
+  /// No Termux: /data/data/com.termux/files/usr/bin/java
+  String javaPath = '';
+
   ProcessStep currentStep = ProcessStep.idle;
   double progress = 0.0;
   int filesDecrypted = 0;
@@ -45,6 +50,7 @@ class DecryptorProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     apktoolJarPath = prefs.getString('apktool_path');
     outputFolder = prefs.getString('output_folder') ?? '';
+    javaPath = prefs.getString('java_path') ?? '';
     useDirectExtraction = prefs.getBool('use_direct_extraction') ?? false;
     notifyListeners();
   }
@@ -57,6 +63,7 @@ class DecryptorProvider extends ChangeNotifier {
     if (outputFolder.isNotEmpty) {
       await prefs.setString('output_folder', outputFolder);
     }
+    await prefs.setString('java_path', javaPath);
     await prefs.setBool('use_direct_extraction', useDirectExtraction);
   }
 
@@ -97,6 +104,12 @@ class DecryptorProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setJavaPath(String path) {
+    javaPath = path.trim();
+    savePreferences();
+    notifyListeners();
+  }
+
   // ─── Processo Principal ───────────────────────────────────────────
   Future<void> runFullProcess() async {
     if (apkPath == null || apkPath!.isEmpty) {
@@ -129,6 +142,7 @@ class DecryptorProvider extends ChangeNotifier {
           apkPath: apkPath!,
           outputDir: decompiledDir,
           apktoolJarPath: apktoolJarPath!,
+          javaExecutable: javaPath.isEmpty ? 'java' : javaPath,
         );
       }
 
