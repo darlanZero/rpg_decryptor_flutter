@@ -187,18 +187,18 @@ class DecryptorProvider extends ChangeNotifier {
       encryptionInfo = info;
       _setStep(ProcessStep.analyzing, 0.55);
 
-      // ── Passo 4: Localizar arquivos .enc ─────────────────────────
-      final encFolder = DecryptorService.findEncFolder(decompiledDir);
+      // ── Passo 4: Localizar assets do APK ─────────────────────────
+      final assetsRoot = DecryptorService.findAssetsRoot(decompiledDir);
+      final hasEnc = DecryptorService.hasEncFiles(assetsRoot);
 
-      if (encFolder == null) {
-        _log('❌ Nenhum arquivo .enc encontrado no APK extraído.');
-        _setStep(ProcessStep.error, 0);
-        return;
+      if (!hasEnc) {
+        _log('⚠️  Nenhum arquivo .enc encontrado.');
+        _log('   Exportando todos os assets sem decriptação...');
+      } else {
+        _log('📂 Assets raiz: $assetsRoot');
       }
 
-      _log('📂 Pasta com arquivos .enc: $encFolder');
-
-      // ── Passo 5: Descriptografar ─────────────────────────────────
+      // ── Passo 5: Exportar tudo + decriptar .enc ───────────────────
       _setStep(ProcessStep.decrypting, 0.6);
 
       // Pasta de saída
@@ -207,8 +207,8 @@ class DecryptorProvider extends ChangeNotifier {
           : p.join(workDir, 'decrypted');
 
       final decryptorSvc = DecryptorService(onLog: _log);
-      filesDecrypted = await decryptorSvc.decryptFolder(
-        inputFolder: encFolder,
+      filesDecrypted = await decryptorSvc.exportAllAssets(
+        assetsRoot: assetsRoot,
         outputFolder: outDir,
         secretKey: info.secretKey,
         encType: info.encryptionType,
@@ -228,13 +228,20 @@ class DecryptorProvider extends ChangeNotifier {
         outputFolder: outDir,
       );
 
-      if (filesDecrypted > 0) {
+      // Considera sucesso se decriptou algum .enc OU se não havia .enc
+      // mas exportou arquivos normais (verificamos pela pasta de saída)
+      final outDirFiles = Directory(outDir).existsSync()
+          ? Directory(outDir).listSync(recursive: true).whereType<File>().length
+          : 0;
+
+      if (outDirFiles > 0) {
         _log('');
-        _log('🎉 CONCLUÍDO! $filesDecrypted arquivo(s) descriptografado(s)');
+        _log('🎉 CONCLUÍDO! $filesDecrypted .enc decriptado(s) + '
+             '${outDirFiles - filesDecrypted} arquivo(s) copiado(s)');
         _log('📁 Saída: $outDir');
         _setStep(ProcessStep.done, 1.0);
       } else {
-        _log('⚠️  Nenhum arquivo descriptografado com sucesso.');
+        _log('⚠️  Nenhum arquivo exportado. Verifique permissões ou a chave.');
         _setStep(ProcessStep.error, 0);
       }
     } catch (e, stack) {

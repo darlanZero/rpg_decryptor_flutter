@@ -101,29 +101,80 @@ class DexParser {
     }
   }
 
-  /// Verifica se o DEX contém referências a APIs de criptografia
+  /// Verifica se o DEX contém referências a APIs de criptografia personalizadas
+  /// (ignora strings genéricas que aparecem em todo RPG Maker)
   bool hasCryptoReferences() {
     if (!isValidDex) return false;
     final strings = extractAllStrings();
+    // Strings específicas de implementação de cifra — mais confiáveis que 'encrypt' genérico
     return strings.any((s) =>
-        s.contains('AES') ||
-        s.contains('cipher') ||
-        s.contains('Cipher') ||
-        s.contains('encrypt') ||
-        s.contains('Encrypt') ||
+        s.contains('AES/') ||
         s.contains('javax/crypto') ||
-        s.contains('SecretKey'));
+        s.contains('SecretKeySpec') ||
+        s.contains('IvParameterSpec') ||
+        s.contains('SecretKey') ||
+        s == 'XOR' ||
+        s == 'xor' ||
+        s == 'AES');
   }
 
-  /// Detecta o tipo de criptografia referenciado no DEX
+  /// Detecta o tipo de criptografia com base nas strings literais do DEX.
+  /// Usa a string de transformação do cipher (ex: "AES/CBC/PKCS5Padding")
+  /// como critério principal — muito mais confiável que strings genéricas.
   String detectEncryptionType() {
     if (!isValidDex) return 'AES-CBC';
     final strings = extractAllStrings();
-    if (strings.any((s) => s.contains('AES/CBC'))) return 'AES-CBC';
-    if (strings.any((s) => s.contains('AES/ECB'))) return 'AES-ECB';
-    if (strings.any((s) => s.contains('AES'))) return 'AES-CBC';
+
+    // Tier 1: string de transformação completa (mais confiável)
+    if (strings.any((s) =>
+        s == 'AES/CBC/PKCS5Padding' ||
+        s == 'AES/CBC/PKCS5PADDING' ||
+        s == 'AES/CBC/NoPadding')) return 'AES-CBC';
+
+    if (strings.any((s) =>
+        s == 'AES/ECB/PKCS5Padding' ||
+        s == 'AES/ECB/PKCS5PADDING' ||
+        s == 'AES/ECB/NoPadding')) return 'AES-ECB';
+
+    // Tier 2: prefixo do modo
+    if (strings.any((s) => s.startsWith('AES/CBC'))) return 'AES-CBC';
+    if (strings.any((s) => s.startsWith('AES/ECB'))) return 'AES-ECB';
+
+    // Tier 3: AES genérico (prefere AES sobre XOR quando ambos presentes)
+    if (strings.any((s) => s == 'AES' || s.startsWith('AES/'))) return 'AES-CBC';
+
+    // XOR apenas se explicitamente indicado e sem AES
     if (strings.any((s) => s == 'XOR' || s == 'xor')) return 'XOR';
+
     return 'AES-CBC';
+  }
+
+  /// Extrai candidatos a chave de criptografia, ordenados por confiança.
+  /// Hex puro de 32/48/64 chars (AES-128/192/256) tem prioridade máxima.
+  List<String> extractKeysCandidates() {
+    final allStrings = extractAllStrings();
+    final candidates = allStrings
+        .where(_isKeyCandidate)
+        .toSet() // deduplica
+        .toList();
+
+    // Ordena: maior score = maior confiança = primeiro na lista
+    candidates.sort((a, b) => _keyScore(b).compareTo(_keyScore(a)));
+    return candidates;
+  }
+
+  /// Pontua um candidato a chave por nível de confiança
+  int _keyScore(String s) {
+    final len = s.length;
+    final isHex = RegExp(r'^[0-9a-fA-F]+$').hasMatch(s);
+
+    if (isHex && len == 32) return 100; // AES-128 hex (mais comum)
+    if (isHex && len == 64) return 90;  // AES-256 hex
+    if (isHex && len == 48) return 80;  // AES-192 hex
+    if (isHex && len >= 16) return 60;  // Outro hex
+    if (len >= 24 && len <= 32) return 40;
+    if (len >= 16 && len < 24) return 20;
+    return 10;
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -196,47 +247,68 @@ class DexParser {
   // Heurísticas para identificar candidatos a chave
   // ─────────────────────────────────────────────────────────────────
 
+  /// Retorna true se a string parece ser uma chave de criptografia válida.
+  /// Usa lista branca estrita: somente ASCII imprimível sem espaço (0x21–0x7E).
   bool _isKeyCandidate(String s) {
     final len = s.length;
 
-    // Comprimento típico de chaves: 16 a 64 chars
+    // Comprimento plausível para uma chave: 16–64 chars
     if (len < 16 || len > 64) return false;
 
-    // Exclui nomes de classes Java (Lcom/...; ou [B, etc)
+    // ── Lista branca de caracteres ──────────────────────────────────
+    // Rejeita QUALQUER caractere não-printável, espaço (0x20) ou fora
+    // do ASCII imprimível (0x21–0x7E). Isso elimina controle chars,
+    // tabs, newlines, null bytes que vazam do parser MUTF-8.
+    for (int i = 0; i < len; i++) {
+      final c = s.codeUnitAt(i);
+      if (c < 0x21 || c > 0x7E) return false;
+    }
+
+    // ── Exclusões por padrão ────────────────────────────────────────
+
+    // Nomes de classe Java: Lcom/example/Foo; ou [B
     if (s.startsWith('L') && s.endsWith(';')) return false;
     if (s.startsWith('[')) return false;
 
-    // Exclui padrões que claramente não são chaves
+    // Paths, FQNs, URIs
     if (s.contains('.') || s.contains('/') || s.contains('\\')) return false;
-    if (s.contains('<') || s.contains('>') || s.contains('(')) return false;
-    if (s.contains(' ')) return false;
 
-    // Chave hex (32 chars = AES-128, 48 = AES-192, 64 = AES-256)
-    if (RegExp(r'^[0-9a-fA-F]+$').hasMatch(s) &&
-        (len == 32 || len == 48 || len == 64)) {
-      return true;
+    // Sintaxe Java/XML/template
+    if (s.contains('<') || s.contains('>')) return false;
+    if (s.contains('(') || s.contains(')')) return false;
+    if (s.contains('{') || s.contains('}')) return false;
+    if (s.contains('"') || s.contains('\'') || s.contains('`')) return false;
+    if (s.contains(':') || s.contains(';') || s.contains(',')) return false;
+    if (s.contains('@') || s.contains('#') || s.contains('!')) return false;
+    if (s.contains('$') || s.contains('%') || s.contains('^')) return false;
+    if (s.contains('&') || s.contains('*') || s.contains('?')) return false;
+    if (s.contains('|') || s.contains('~') || s.contains('-')) return false;
+
+    // ── Tier 1: hex puro (maior confiança) ─────────────────────────
+    // Chaves AES-128/192/256 em hexadecimal: 32, 48 ou 64 chars hex
+    final isHex = RegExp(r'^[0-9a-fA-F]+$').hasMatch(s);
+    if (isHex) {
+      if (len == 32 || len == 48 || len == 64) return true;
+      if (len >= 16) return true; // hex de outros tamanhos plausíveis
+      return false;
     }
 
-    // Chave alfanumérica mista (string literal da chave)
+    // ── Tier 2: alfanumérico puro com mix digit+letra ───────────────
+    if (!RegExp(r'^[A-Za-z0-9+/=]+$').hasMatch(s)) return false;
+
     final hasDigit = s.contains(RegExp(r'\d'));
-    final hasLower = s.contains(RegExp(r'[a-z]'));
-    final hasUpper = s.contains(RegExp(r'[A-Z]'));
+    if (!hasDigit) return false; // chave sem dígito é palavra comum
 
-    // Exige mix de caracteres (evita falsos positivos como palavras normais)
-    if (hasDigit && (hasLower || hasUpper)) {
-      // Rejeita se parece ser um número de versão ou hash de recurso
-      if (RegExp(r'^\d+\.\d+').hasMatch(s)) return false;
-      if (RegExp(r'^[0-9A-F]{8}$').hasMatch(s)) return false; // Cor ARGB
+    final hasLetter = s.contains(RegExp(r'[A-Za-z]'));
+    if (!hasLetter) return false; // só dígitos = número, não chave
 
-      return true;
-    }
+    // Rejeita padrões óbvios que não são chaves
+    if (RegExp(r'^\d+$').hasMatch(s)) return false;           // só números
+    if (RegExp(r'^[A-Za-z]+$').hasMatch(s)) return false;     // só letras
+    if (RegExp(r'^\d+\.\d+').hasMatch(s)) return false;       // versão
+    if (len == 8 && RegExp(r'^[0-9A-F]{8}$').hasMatch(s)) return false; // cor ARGB
 
-    // Strings base64 longas
-    if (RegExp(r'^[A-Za-z0-9+/]{24,}={0,2}$').hasMatch(s) && len >= 24) {
-      return true;
-    }
-
-    return false;
+    return true;
   }
 
   // ─────────────────────────────────────────────────────────────────

@@ -166,9 +166,123 @@ class DecryptorService {
   }
 
   // ─────────────────────────────────────────────────────────────────
-  // Procura a pasta de assets criptografados no APK descompilado
+  // Exportação completa: copia TODOS os assets + decripta os .enc
   // ─────────────────────────────────────────────────────────────────
 
+  /// Exporta todos os arquivos de [assetsRoot] para [outputFolder]:
+  /// - Arquivos sem .enc → copiados direto (mantendo estrutura de pastas)
+  /// - Arquivos .enc     → decriptados e salvos sem a extensão .enc
+  ///
+  /// Retorna o número de arquivos .enc decriptados com sucesso.
+  Future<int> exportAllAssets({
+    required String assetsRoot,
+    required String outputFolder,
+    required String secretKey,
+    required String encType,
+    String encExtension = '.enc',
+    void Function(int current, int total)? onProgress,
+  }) async {
+    final rootDir = Directory(assetsRoot);
+    if (!rootDir.existsSync()) {
+      onLog('❌ Pasta de assets não encontrada: $assetsRoot');
+      return 0;
+    }
+
+    final outDir = Directory(outputFolder);
+    outDir.createSync(recursive: true);
+
+    // Coleta todos os arquivos recursivamente
+    final allFiles = rootDir
+        .listSync(recursive: true)
+        .whereType<File>()
+        .toList();
+
+    final encFiles = allFiles.where((f) => f.path.endsWith(encExtension)).toList();
+    final regularFiles = allFiles.where((f) => !f.path.endsWith(encExtension)).toList();
+
+    final total = allFiles.length;
+    onLog('📋 Total: ${allFiles.length} arquivo(s) '
+          '(${encFiles.length} criptografados + ${regularFiles.length} normais)');
+    onLog('${'─' * 40}');
+
+    int current = 0;
+    int decrypted = 0;
+
+    // ── Copia arquivos normais ──────────────────────────────────────
+    for (final file in regularFiles) {
+      final relative = p.relative(file.path, from: assetsRoot);
+      final outPath = p.join(outputFolder, relative);
+      try {
+        Directory(p.dirname(outPath)).createSync(recursive: true);
+        file.copySync(outPath);
+      } catch (_) {
+        // Ignora erros de cópia (arquivos de sistema, permissão, etc.)
+      }
+      current++;
+      onProgress?.call(current, total);
+    }
+
+    onLog('📁 ${regularFiles.length} arquivo(s) copiados');
+
+    // ── Decripta arquivos .enc ──────────────────────────────────────
+    for (int i = 0; i < encFiles.length; i++) {
+      final file = encFiles[i];
+      final relative = p.relative(file.path, from: assetsRoot);
+      final outPath = p.join(
+        outputFolder,
+        relative.replaceAll(RegExp(r'\.enc$'), ''),
+      );
+
+      try {
+        Directory(p.dirname(outPath)).createSync(recursive: true);
+        final data = file.readAsBytesSync();
+        final result = decryptFile(data, secretKey, encType);
+
+        if (result != null) {
+          File(outPath).writeAsBytesSync(result);
+          decrypted++;
+          onLog('[${i + 1}/${encFiles.length}] ✅ ${p.basename(file.path)}');
+        } else {
+          onLog('[${i + 1}/${encFiles.length}] ❌ ${p.basename(file.path)} (decriptação falhou)');
+        }
+      } catch (e) {
+        onLog('[${i + 1}/${encFiles.length}] ❌ ${p.basename(file.path)} ($e)');
+      }
+
+      current++;
+      onProgress?.call(current, total);
+    }
+
+    onLog('${'─' * 40}');
+    onLog('🎉 Resultado: $decrypted/${encFiles.length} decriptados, '
+          '${regularFiles.length} copiados');
+
+    return decrypted;
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Procura a raiz dos assets no APK descompilado
+  // ─────────────────────────────────────────────────────────────────
+
+  /// Retorna a pasta raiz dos assets do APK extraído.
+  /// Prioriza [decompiledDir]/assets se existir.
+  static String findAssetsRoot(String decompiledDir) {
+    final assetsDir = Directory(p.join(decompiledDir, 'assets'));
+    if (assetsDir.existsSync()) return assetsDir.path;
+    return decompiledDir; // fallback: raiz inteira
+  }
+
+  /// Verifica se existem arquivos .enc em algum lugar do diretório
+  static bool hasEncFiles(String dir, {String ext = '.enc'}) {
+    final d = Directory(dir);
+    if (!d.existsSync()) return false;
+    return d
+        .listSync(recursive: true)
+        .whereType<File>()
+        .any((f) => f.path.endsWith(ext));
+  }
+
+  // Mantido por compatibilidade — usa o novo exportAllAssets internamente
   static String? findEncFolder(String decompiledDir) {
     final candidates = [
       p.join(decompiledDir, 'assets', 'data'),

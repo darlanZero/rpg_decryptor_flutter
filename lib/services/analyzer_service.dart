@@ -257,31 +257,28 @@ class AnalyzerService {
 
       final encType = parser.detectEncryptionType();
       onLog('   📂 ${p.basename(dexFile.path)}: DEX v${parser.version}, '
-            'possui referências crypto ($encType)');
+            'refs crypto → $encType');
 
-      // Extrai candidatos a chave da tabela de strings
-      final keyCandidates = parser.extractAllStrings(filterForKeys: true);
+      // Extrai candidatos ordenados por confiança (hex 32/48/64 chars primeiro)
+      final keyCandidates = parser.extractKeysCandidates();
 
       if (keyCandidates.isEmpty) {
-        onLog('   ⚠️  Nenhum candidato a chave nas strings do DEX.');
+        onLog('   ⚠️  Nenhum candidato a chave válido nas strings do DEX.');
         return null;
       }
 
-      onLog('   🔎 ${keyCandidates.length} candidato(s) encontrado(s)');
+      onLog('   🔎 ${keyCandidates.length} candidato(s) filtrado(s)');
 
-      // Retorna o primeiro candidato válido
-      for (final candidate in keyCandidates) {
-        final shortKey = candidate.length > 20
-            ? '${candidate.substring(0, 20)}...'
-            : candidate;
-        onLog('🔑 Chave encontrada em ${p.basename(dexFile.path)}: $shortKey');
-        onLog('🔒 Tipo: $encType (via parser DEX)');
-        return EncryptionInfo(
-          secretKey: candidate,
-          encryptionType: encType,
-          sourceFile: p.basename(dexFile.path),
-        );
-      }
+      // Usa o candidato de maior confiança (primeiro da lista ordenada)
+      final best = keyCandidates.first;
+      final shortKey = best.length > 20 ? '${best.substring(0, 20)}...' : best;
+      onLog('🔑 Chave encontrada em ${p.basename(dexFile.path)}: $shortKey');
+      onLog('🔒 Tipo: $encType (via parser DEX binário)');
+      return EncryptionInfo(
+        secretKey: best,
+        encryptionType: encType,
+        sourceFile: p.basename(dexFile.path),
+      );
     } catch (e) {
       onLog('   ⚠️  Erro ao parsear ${p.basename(dexFile.path)}: $e');
     }
