@@ -184,6 +184,23 @@ class DecryptorProvider extends ChangeNotifier {
         );
       }
 
+      // ── Guardrail: força AES para arquivos .json.enc ─────────────
+      // XOR é usado exclusivamente para imagens/áudio no RPG Maker MV/MZ
+      // padrão. Arquivos .json.enc são cifrados com AES pelo runtime Android.
+      // Se o analisador retornou XOR mas existem .json.enc, sobrescreve para AES-CBC.
+      if (info.encryptionType.toUpperCase() == 'XOR') {
+        final hasJsonEnc = _hasJsonEncFiles(decompiledDir);
+        if (hasJsonEnc) {
+          _log('⚠️  Tipo XOR detectado, mas há arquivos .json.enc (AES).');
+          _log('   → Sobrescrevendo para AES-CBC (correto para .json.enc).');
+          info = EncryptionInfo(
+            secretKey: info.secretKey,
+            encryptionType: 'AES-CBC',
+            sourceFile: info.sourceFile,
+          );
+        }
+      }
+
       encryptionInfo = info;
       _setStep(ProcessStep.analyzing, 0.55);
 
@@ -269,6 +286,19 @@ class DecryptorProvider extends ChangeNotifier {
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────
+
+  /// Verifica se há arquivos .json.enc em qualquer subdirectório de [dir]
+  bool _hasJsonEncFiles(String dir) {
+    try {
+      return Directory(dir)
+          .listSync(recursive: true)
+          .whereType<File>()
+          .any((f) => f.path.endsWith('.json.enc'));
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<String> _resolveWorkDir() async {
     if (Platform.isAndroid) {
       // Tenta usar storage externo no Android

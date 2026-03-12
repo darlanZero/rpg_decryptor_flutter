@@ -280,7 +280,7 @@ class DexParser {
     if (s.contains('"') || s.contains('\'') || s.contains('`')) return false;
     if (s.contains(':') || s.contains(';') || s.contains(',')) return false;
     if (s.contains('@') || s.contains('#') || s.contains('!')) return false;
-    if (s.contains('$') || s.contains('%') || s.contains('^')) return false;
+    if (s.contains('\$') || s.contains('%') || s.contains('^')) return false;
     if (s.contains('&') || s.contains('*') || s.contains('?')) return false;
     if (s.contains('|') || s.contains('~') || s.contains('-')) return false;
 
